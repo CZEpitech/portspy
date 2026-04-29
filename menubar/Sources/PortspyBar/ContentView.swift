@@ -150,7 +150,13 @@ struct ContentView: View {
                                         handleKillOutcome(outcome, for: group)
                                     }
                                 },
-                                onOpenURL: onOpenURL
+                                onOpenURL: onOpenURL,
+                                onCopyPath: { path in
+                                    let pasteboard = NSPasteboard.general
+                                    pasteboard.clearContents()
+                                    pasteboard.setString(path, forType: .string)
+                                    toast.show("Copied \(path)", icon: "doc.on.doc.fill")
+                                }
                             )
                             Divider()
                         }
@@ -211,6 +217,7 @@ struct PortRow: View {
     let onClear: () -> Void
     let onKill: () -> Void
     let onOpenURL: (URL) -> Void
+    let onCopyPath: (String) -> Void
 
     @State private var draft: String = ""
     @State private var hover = false
@@ -237,21 +244,32 @@ struct PortRow: View {
         .onHover { hover = $0 }
     }
 
+    @State private var pathHover = false
+
     private func pathRow(_ path: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "folder")
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-            Text(path)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
+        Button {
+            onCopyPath(group.cwd ?? path)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: pathHover ? "doc.on.doc" : "folder")
+                    .font(.system(size: 9))
+                    .foregroundStyle(pathHover ? .blue : .secondary)
+                Text(path)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(pathHover ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 6)
+        .buttonStyle(.plain)
+        .onHover { pathHover = $0 }
+        .help("Click to copy path")
     }
 
     private var mainRow: some View {
