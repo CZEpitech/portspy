@@ -7,13 +7,13 @@ A small CLI to find out which process is holding a port.
 From source:
 
 ```
-go install github.com/y1qne/portspy@latest
+go install github.com/CZEpitech/portspy@latest
 ```
 
 Or clone and build:
 
 ```
-git clone https://github.com/y1qne/portspy.git
+git clone https://github.com/CZEpitech/portspy.git
 cd portspy
 go build -o portspy
 ```

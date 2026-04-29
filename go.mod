@@ -1,3 +1,3 @@
-module github.com/y1qne/portspy
+module github.com/CZEpitech/portspy
 
 go 1.23
