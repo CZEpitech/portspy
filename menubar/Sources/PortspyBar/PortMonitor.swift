@@ -76,7 +76,7 @@ final class PortMonitor: ObservableObject {
         }
     }
 
-    static func parseLsof(_ output: String) -> [PortListener] {
+    nonisolated static func parseLsof(_ output: String) -> [PortListener] {
         var result: [PortListener] = []
         var pid = 0
         var command = ""
@@ -112,7 +112,7 @@ final class PortMonitor: ObservableObject {
         }
     }
 
-    static func parseAddrPort(_ s: String) -> (addr: String, port: Int)? {
+    nonisolated static func parseAddrPort(_ s: String) -> (addr: String, port: Int)? {
         var trimmed = s
         if let arrow = trimmed.range(of: "->") {
             trimmed = String(trimmed[..<arrow.lowerBound])
@@ -126,7 +126,7 @@ final class PortMonitor: ObservableObject {
         return (addr, port)
     }
 
-    static func resolveUser(_ uid: String) -> String {
+    nonisolated static func resolveUser(_ uid: String) -> String {
         guard let id = uid_t(uid) else { return uid }
         guard let pwd = getpwuid(id), let name = pwd.pointee.pw_name else { return uid }
         return String(cString: name)
