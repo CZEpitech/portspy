@@ -14,6 +14,53 @@ struct PortListener: Identifiable, Hashable {
     var id: String { "\(pid)-\(proto)-\(port)-\(address)" }
 }
 
+struct PortGroup: Identifiable, Hashable {
+    let proto: String
+    let port: Int
+    let command: String
+    let user: String
+    let addresses: [String]
+    let pids: [Int]
+
+    var id: String { "\(proto)-\(port)-\(command)" }
+    var representative: PortListener {
+        PortListener(
+            proto: proto,
+            port: port,
+            address: addresses.first ?? "",
+            pid: pids.first ?? 0,
+            user: user,
+            command: command
+        )
+    }
+    var workerCount: Int { pids.count }
+    var addressLabel: String {
+        let unique = Array(Set(addresses)).sorted()
+        return unique.joined(separator: ", ")
+    }
+}
+
+extension Array where Element == PortListener {
+    func grouped() -> [PortGroup] {
+        let dict = Dictionary(grouping: self) { l in "\(l.proto)-\(l.port)-\(l.command)" }
+        return dict.values.map { items -> PortGroup in
+            let first = items[0]
+            return PortGroup(
+                proto: first.proto,
+                port: first.port,
+                command: first.command,
+                user: first.user,
+                addresses: items.map(\.address),
+                pids: items.map(\.pid).sorted()
+            )
+        }
+        .sorted {
+            if $0.port != $1.port { return $0.port < $1.port }
+            return $0.command < $1.command
+        }
+    }
+}
+
 enum KillOutcome {
     case killed
     case escalated
@@ -55,34 +102,46 @@ final class PortMonitor: ObservableObject {
         }
     }
 
-    func kill(_ listener: PortListener) async -> KillOutcome {
-        let result = Darwin.kill(pid_t(listener.pid), SIGKILL)
-        if result != 0 {
-            let err = errno
-            if err == EPERM {
-                return await killWithAdmin(listener)
+    func kill(_ group: PortGroup) async -> KillOutcome {
+        var needsAdmin = false
+        var firstFailure: String?
+        for pid in group.pids {
+            let result = Darwin.kill(pid_t(pid), SIGKILL)
+            if result != 0 {
+                let err = errno
+                if err == EPERM {
+                    needsAdmin = true
+                } else if firstFailure == nil {
+                    firstFailure = String(cString: strerror(err))
+                }
             }
-            return .failed(String(cString: strerror(err)))
+        }
+        if needsAdmin {
+            return await killWithAdmin(group)
+        }
+        if let firstFailure {
+            return .failed(firstFailure)
         }
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         await refreshAsync()
         let respawned = listeners.contains { l in
-            l.port == listener.port && l.command == listener.command
+            l.port == group.port && l.command == group.command
         }
         if respawned {
-            return .respawned(hint: Self.brewServiceHint(for: listener.command))
+            return .respawned(hint: Self.brewServiceHint(for: group.command))
         }
         return .killed
     }
 
-    private func killWithAdmin(_ listener: PortListener) async -> KillOutcome {
-        await withCheckedContinuation { cont in
+    private func killWithAdmin(_ group: PortGroup) async -> KillOutcome {
+        let pids = group.pids.map(String.init).joined(separator: " ")
+        return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let task = Process()
                 task.launchPath = "/usr/bin/osascript"
                 task.arguments = [
                     "-e",
-                    "do shell script \"kill -9 \(listener.pid)\" with administrator privileges"
+                    "do shell script \"kill -9 \(pids)\" with administrator privileges"
                 ]
                 let errPipe = Pipe()
                 task.standardError = errPipe

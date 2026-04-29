@@ -60,7 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.$listeners
             .receive(on: DispatchQueue.main)
             .sink { [weak self] listeners in
-                self?.statusItem?.button?.title = " \(listeners.count)"
+                let count = listeners.grouped().count
+                self?.statusItem?.button?.title = " \(count)"
             }
             .store(in: &cancellables)
     }

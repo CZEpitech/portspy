@@ -12,24 +12,28 @@ struct ContentView: View {
     @State private var editingId: String?
     @State private var category: PortCategory = .web
 
-    var matched: [PortListener] {
-        guard !query.isEmpty else { return monitor.listeners }
+    var allGroups: [PortGroup] {
+        monitor.listeners.grouped()
+    }
+
+    var matchedGroups: [PortGroup] {
+        guard !query.isEmpty else { return allGroups }
         let q = query.lowercased()
-        return monitor.listeners.filter { l in
-            let alias = aliases.alias(for: l)?.lowercased() ?? ""
-            return String(l.port).contains(q)
-                || l.command.lowercased().contains(q)
-                || l.user.lowercased().contains(q)
-                || l.address.lowercased().contains(q)
+        return allGroups.filter { g in
+            let alias = aliases.alias(for: g.representative)?.lowercased() ?? ""
+            return String(g.port).contains(q)
+                || g.command.lowercased().contains(q)
+                || g.user.lowercased().contains(q)
+                || g.addressLabel.lowercased().contains(q)
                 || alias.contains(q)
         }
     }
 
-    var grouped: [PortCategory: [PortListener]] {
-        Dictionary(grouping: matched) { Categorizer.category(for: $0) }
+    var grouped: [PortCategory: [PortGroup]] {
+        Dictionary(grouping: matchedGroups) { Categorizer.category(for: $0.representative) }
     }
 
-    var visible: [PortListener] {
+    var visible: [PortGroup] {
         grouped[category] ?? []
     }
 
@@ -108,7 +112,7 @@ struct ContentView: View {
                     Image(systemName: "questionmark.circle")
                         .font(.title2)
                         .foregroundStyle(.secondary)
-                    Text(monitor.listeners.isEmpty
+                    Text(allGroups.isEmpty
                          ? "No listening ports"
                          : "Nothing in \(category.label)")
                         .font(.callout)
@@ -119,14 +123,14 @@ struct ContentView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(visible) { listener in
+                        ForEach(visible) { group in
                             PortRow(
-                                listener: listener,
-                                alias: aliases.alias(for: listener),
-                                isEditing: editingId == listener.id,
-                                onStartEdit: { editingId = listener.id },
+                                group: group,
+                                alias: aliases.alias(for: group.representative),
+                                isEditing: editingId == group.id,
+                                onStartEdit: { editingId = group.id },
                                 onCommit: { newValue in
-                                    aliases.setAlias(newValue, for: listener)
+                                    aliases.setAlias(newValue, for: group.representative)
                                     editingId = nil
                                     if !newValue.trimmingCharacters(in: .whitespaces).isEmpty {
                                         toast.show("Renamed to \(newValue)", icon: "pencil.circle.fill")
@@ -134,14 +138,14 @@ struct ContentView: View {
                                 },
                                 onCancel: { editingId = nil },
                                 onClear: {
-                                    aliases.clear(for: listener)
+                                    aliases.clear(for: group.representative)
                                     editingId = nil
                                     toast.show("Alias cleared", icon: "arrow.uturn.backward.circle.fill")
                                 },
                                 onKill: {
                                     Task {
-                                        let outcome = await monitor.kill(listener)
-                                        handleKillOutcome(outcome, for: listener)
+                                        let outcome = await monitor.kill(group)
+                                        handleKillOutcome(outcome, for: group)
                                     }
                                 },
                                 onOpenURL: onOpenURL
@@ -155,12 +159,13 @@ struct ContentView: View {
         }
     }
 
-    private func handleKillOutcome(_ outcome: KillOutcome, for listener: PortListener) {
+    private func handleKillOutcome(_ outcome: KillOutcome, for group: PortGroup) {
+        let label = group.workerCount > 1 ? "\(group.workerCount) PIDs" : "PID \(group.pids.first ?? 0)"
         switch outcome {
         case .killed:
-            toast.show("Killed PID \(listener.pid)", icon: "xmark.circle.fill")
+            toast.show("Killed \(label)", icon: "xmark.circle.fill")
         case .escalated:
-            toast.show("Killed PID \(listener.pid) (admin)", icon: "lock.open.fill")
+            toast.show("Killed \(label) (admin)", icon: "lock.open.fill")
         case .respawned(let hint):
             if let hint {
                 let cmd = "brew services stop \(hint)"
@@ -178,7 +183,7 @@ struct ContentView: View {
 
     private var footer: some View {
         HStack {
-            Text("\(monitor.listeners.count) listening")
+            Text("\(allGroups.count) services")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -195,7 +200,7 @@ struct ContentView: View {
 }
 
 struct PortRow: View {
-    let listener: PortListener
+    let group: PortGroup
     let alias: String?
     let isEditing: Bool
     let onStartEdit: () -> Void
@@ -207,34 +212,47 @@ struct PortRow: View {
 
     @State private var draft: String = ""
     @State private var hover = false
+    @State private var expanded = false
     @FocusState private var focused: Bool
 
-    private var displayName: String { alias ?? listener.command }
-    private var category: PortCategory { Categorizer.category(for: listener) }
+    private var displayName: String { alias ?? group.command }
+    private var category: PortCategory { Categorizer.category(for: group.representative) }
     private var webURL: URL? {
-        category == .web ? Categorizer.webURL(for: listener) : nil
+        category == .web ? Categorizer.webURL(for: group.representative) : nil
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            mainRow
+            if expanded && group.workerCount > 1 {
+                pidsList
+            }
+        }
+        .background((hover && !isEditing) ? Color.gray.opacity(0.12) : Color.clear)
+        .onHover { hover = $0 }
+    }
+
+    private var mainRow: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("\(listener.port)")
+                    Text("\(group.port)")
                         .font(.system(.body, design: .monospaced).weight(.semibold))
-                    Text(listener.proto.uppercased())
+                    Text(group.proto.uppercased())
                         .font(.system(.caption2, design: .monospaced))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .background(Color.secondary.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                         .foregroundStyle(.secondary)
-                    Text(listener.address)
+                    Text(group.addressLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 if isEditing {
                     HStack(spacing: 6) {
-                        TextField(listener.command, text: $draft)
+                        TextField(group.command, text: $draft)
                             .textFieldStyle(.roundedBorder)
                             .font(.caption)
                             .focused($focused)
@@ -249,17 +267,39 @@ struct PortRow: View {
                             .keyboardShortcut(.cancelAction)
                     }
                 } else {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         Text(displayName)
                             .font(.caption)
                             .foregroundStyle(alias != nil ? .primary : .secondary)
                             .fontWeight(alias != nil ? .medium : .regular)
                         if alias != nil {
-                            Text("(\(listener.command))")
+                            Text("(\(group.command))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Text("• PID \(listener.pid) • \(listener.user)")
+                        if group.workerCount > 1 {
+                            Button {
+                                expanded.toggle()
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 8, weight: .semibold))
+                                    Text("\(group.workerCount) workers")
+                                }
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.blue.opacity(0.15))
+                                .clipShape(Capsule())
+                                .foregroundStyle(.blue)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text("PID \(group.pids.first ?? 0)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("• \(group.user)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -300,17 +340,30 @@ struct PortRow: View {
                         .foregroundStyle(.red)
                 }
                 .buttonStyle(.plain)
-                .help("Send SIGTERM to PID \(listener.pid)")
+                .help(group.workerCount > 1
+                      ? "SIGKILL all \(group.workerCount) PIDs"
+                      : "SIGKILL PID \(group.pids.first ?? 0)")
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .background((hover && !isEditing) ? Color.gray.opacity(0.12) : Color.clear)
-        .onHover { hover = $0 }
         .onChange(of: isEditing) { editing in
             if editing { focused = true }
         }
+    }
+
+    private var pidsList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(group.pids, id: \.self) { pid in
+                Text("PID \(pid)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 24)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 6)
     }
 }
