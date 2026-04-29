@@ -1,15 +1,24 @@
+import AppKit
 import Combine
 import Darwin
 import Foundation
 
 struct PortListener: Identifiable, Hashable {
-    let id = UUID()
     let proto: String
     let port: Int
     let address: String
     let pid: Int
     let user: String
     let command: String
+
+    var id: String { "\(pid)-\(proto)-\(port)-\(address)" }
+}
+
+enum KillOutcome {
+    case killed
+    case escalated
+    case respawned(hint: String?)
+    case failed(String)
 }
 
 @MainActor
@@ -46,12 +55,72 @@ final class PortMonitor: ObservableObject {
         }
     }
 
-    func kill(pid: Int) {
-        _ = Darwin.kill(pid_t(pid), SIGTERM)
-        Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            await refreshAsync()
+    func kill(_ listener: PortListener) async -> KillOutcome {
+        let result = Darwin.kill(pid_t(listener.pid), SIGKILL)
+        if result != 0 {
+            let err = errno
+            if err == EPERM {
+                return await killWithAdmin(listener)
+            }
+            return .failed(String(cString: strerror(err)))
         }
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        await refreshAsync()
+        let respawned = listeners.contains { l in
+            l.port == listener.port && l.command == listener.command
+        }
+        if respawned {
+            return .respawned(hint: Self.brewServiceHint(for: listener.command))
+        }
+        return .killed
+    }
+
+    private func killWithAdmin(_ listener: PortListener) async -> KillOutcome {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let task = Process()
+                task.launchPath = "/usr/bin/osascript"
+                task.arguments = [
+                    "-e",
+                    "do shell script \"kill -9 \(listener.pid)\" with administrator privileges"
+                ]
+                let errPipe = Pipe()
+                task.standardError = errPipe
+                task.standardOutput = Pipe()
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    if task.terminationStatus == 0 {
+                        cont.resume(returning: .escalated)
+                    } else {
+                        let data = errPipe.fileHandleForReading.readDataToEndOfFile()
+                        let raw = String(data: data, encoding: .utf8) ?? ""
+                        let msg = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                        cont.resume(returning: .failed(msg.isEmpty ? "admin auth declined" : msg))
+                    }
+                } catch {
+                    cont.resume(returning: .failed(error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    static func brewServiceHint(for command: String) -> String? {
+        let map: [String: String] = [
+            "mysqld": "mysql",
+            "mariadbd": "mariadb",
+            "mongod": "mongodb-community",
+            "redis-server": "redis",
+            "postgres": "postgresql",
+            "httpd": "httpd",
+            "nginx": "nginx",
+            "php-fpm": "php",
+            "memcached": "memcached",
+            "elasticsearch": "elasticsearch",
+            "rabbitmq-server": "rabbitmq",
+            "ollama": "ollama"
+        ]
+        return map[command]
     }
 
     static func queryListeners() async throws -> [PortListener] {

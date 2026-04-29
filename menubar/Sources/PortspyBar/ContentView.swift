@@ -4,9 +4,12 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var monitor: PortMonitor
     @ObservedObject var aliases: AliasStore
+    @ObservedObject var toast: ToastCenter
+    let onOpenURL: (URL) -> Void
+    let onClose: () -> Void
 
     @State private var query = ""
-    @State private var editingKey: String?
+    @State private var editingId: String?
     @State private var category: PortCategory = .web
 
     var matched: [PortListener] {
@@ -31,20 +34,24 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            tabs
-            Divider()
-            if let error = monitor.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(8)
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                header
+                tabs
                 Divider()
+                if let error = monitor.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(8)
+                    Divider()
+                }
+                list
+                Divider()
+                footer
             }
-            list
-            Divider()
-            footer
+            ToastView(toast: toast)
+                .animation(.easeInOut(duration: 0.2), value: toast.message)
         }
         .frame(width: 420)
     }
@@ -116,18 +123,28 @@ struct ContentView: View {
                             PortRow(
                                 listener: listener,
                                 alias: aliases.alias(for: listener),
-                                isEditing: editingKey == aliases.key(for: listener),
-                                onStartEdit: { editingKey = aliases.key(for: listener) },
+                                isEditing: editingId == listener.id,
+                                onStartEdit: { editingId = listener.id },
                                 onCommit: { newValue in
                                     aliases.setAlias(newValue, for: listener)
-                                    editingKey = nil
+                                    editingId = nil
+                                    if !newValue.trimmingCharacters(in: .whitespaces).isEmpty {
+                                        toast.show("Renamed to \(newValue)", icon: "pencil.circle.fill")
+                                    }
                                 },
-                                onCancel: { editingKey = nil },
+                                onCancel: { editingId = nil },
                                 onClear: {
                                     aliases.clear(for: listener)
-                                    editingKey = nil
+                                    editingId = nil
+                                    toast.show("Alias cleared", icon: "arrow.uturn.backward.circle.fill")
                                 },
-                                onKill: { monitor.kill(pid: listener.pid) }
+                                onKill: {
+                                    Task {
+                                        let outcome = await monitor.kill(listener)
+                                        handleKillOutcome(outcome, for: listener)
+                                    }
+                                },
+                                onOpenURL: onOpenURL
                             )
                             Divider()
                         }
@@ -138,6 +155,27 @@ struct ContentView: View {
         }
     }
 
+    private func handleKillOutcome(_ outcome: KillOutcome, for listener: PortListener) {
+        switch outcome {
+        case .killed:
+            toast.show("Killed PID \(listener.pid)", icon: "xmark.circle.fill")
+        case .escalated:
+            toast.show("Killed PID \(listener.pid) (admin)", icon: "lock.open.fill")
+        case .respawned(let hint):
+            if let hint {
+                let cmd = "brew services stop \(hint)"
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(cmd, forType: .string)
+                toast.show("Respawned. Copied: \(cmd)", icon: "arrow.clockwise.circle.fill", duration: 4)
+            } else {
+                toast.show("Process respawned (managed by launchd)", icon: "arrow.clockwise.circle.fill", duration: 4)
+            }
+        case .failed(let msg):
+            toast.show("Kill failed: \(msg)", icon: "exclamationmark.triangle.fill", duration: 4)
+        }
+    }
+
     private var footer: some View {
         HStack {
             Text("\(monitor.listeners.count) listening")
@@ -145,6 +183,8 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Refresh") { monitor.refresh() }
+                .buttonStyle(.borderless)
+            Button("Close") { onClose() }
                 .buttonStyle(.borderless)
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)
@@ -163,6 +203,7 @@ struct PortRow: View {
     let onCancel: () -> Void
     let onClear: () -> Void
     let onKill: () -> Void
+    let onOpenURL: (URL) -> Void
 
     @State private var draft: String = ""
     @State private var hover = false
@@ -229,7 +270,7 @@ struct PortRow: View {
             if !isEditing && hover {
                 if let url = webURL {
                     Button {
-                        NSWorkspace.shared.open(url)
+                        onOpenURL(url)
                     } label: {
                         Image(systemName: "safari")
                             .foregroundStyle(.blue)
@@ -270,12 +311,6 @@ struct PortRow: View {
         .onHover { hover = $0 }
         .onChange(of: isEditing) { editing in
             if editing { focused = true }
-        }
-        .onTapGesture(count: 2) {
-            if !isEditing {
-                draft = alias ?? ""
-                onStartEdit()
-            }
         }
     }
 }
