@@ -1,0 +1,7 @@
+/portspy
+/dist/
+*.test
+*.out
+.DS_Store
+.idea/
+.vscode/
