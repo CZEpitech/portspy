@@ -21,11 +21,13 @@ struct ContentView: View {
         let q = query.lowercased()
         return allGroups.filter { g in
             let alias = aliases.alias(for: g.representative)?.lowercased() ?? ""
+            let path = (g.cwd ?? "").lowercased()
             return String(g.port).contains(q)
                 || g.command.lowercased().contains(q)
                 || g.user.lowercased().contains(q)
                 || g.addressLabel.lowercased().contains(q)
                 || alias.contains(q)
+                || path.contains(q)
         }
     }
 
@@ -64,7 +66,7 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Filter port, process, alias, user", text: $query)
+            TextField("Filter port, process, alias, user, path", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(.body))
             if monitor.isRefreshing {
@@ -224,12 +226,32 @@ struct PortRow: View {
     var body: some View {
         VStack(spacing: 0) {
             mainRow
+            if let path = group.prettyPath, !isEditing {
+                pathRow(path)
+            }
             if expanded && group.workerCount > 1 {
                 pidsList
             }
         }
         .background((hover && !isEditing) ? Color.gray.opacity(0.12) : Color.clear)
         .onHover { hover = $0 }
+    }
+
+    private func pathRow(_ path: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "folder")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(path)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
     }
 
     private var mainRow: some View {
