@@ -41,9 +41,28 @@ PROTO  PORT   ADDRESS    PID   USER    COMMAND
 tcp    3306   127.0.0.1  1021  chakib  mysqld
 ```
 
+## Menu bar app (macOS)
+
+A small SwiftUI status bar app lives in `menubar/`. It puts a network icon
+with the live count of listening ports next to the clock; clicking it opens
+a popover with the same information as the CLI plus a quick filter and a
+per-row kill button.
+
+Build and run:
+
+```
+cd menubar
+./build.sh
+open .build/Portspy.app
+```
+
+Requires Xcode 15 or later and macOS 13 or later. The build script produces
+a universal binary (arm64 + x86_64) and ad-hoc signs it for local use.
+
 ## Platforms
 
-macOS and Linux. Windows is not supported yet.
+CLI: macOS and Linux. Menu bar app: macOS 13 or later. Windows is not
+supported yet.
 
 ## How it works
 
