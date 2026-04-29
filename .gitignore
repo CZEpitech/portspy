@@ -5,3 +5,6 @@
 .DS_Store
 .idea/
 .vscode/
+menubar/.build/
+menubar/.swiftpm/
+menubar/Package.resolved
